@@ -25,6 +25,19 @@ class Vector {
         this.overlapsAny = false;
     }
 
+    clone() {
+        return new Vector(this.x, this.y);
+    }
+
+    /**
+     * Adds another vector to this vector
+     * @param {Vector} other The other vector to add to this vector
+     * @return {Vector} The result of the addition
+     */
+    add(other) {
+        return new Vector(this.x + other.x, this.y + other.y);
+    }
+
     /**
      * Subtracts another vector from this vector
      * @param {Vector} other The other vector to subtract from this vector
@@ -69,12 +82,12 @@ class Vector {
 
 class Line {
     /**
-     * @param {Vector[]} points The array of points in the game
-     * @param {number} start The index of the starting point in the this.points array
-     * @param {number} end The index of the ending point in the this.points array
+     * @param {State} state The game state containing the points
+     * @param {number} start The index of the starting point in the points array
+     * @param {number} end The index of the ending point in the points array
      */
-    constructor(points, start, end) {
-        this.points = points;
+    constructor(state, start, end) {
+        this.state = state;
         this.start = start;
         this.end = end;
         this.intersectsAny = false;
@@ -84,7 +97,7 @@ class Line {
      * @return {Vector} The vector representation of the line
      */
     toVector() {
-        return this.points[this.end].subtract(this.points[this.start]);
+        return this.state.points[this.end].subtract(this.state.points[this.start]);
     }
 
     /**
@@ -93,7 +106,16 @@ class Line {
      */
     draw(canvas) {
         const color = this.intersectsAny ? 'red' : 'green';
-        canvas.drawLine(this.points[this.start], this.points[this.end], LINE_WIDTH, color);
+        canvas.drawLine(this.state.points[this.start], this.state.points[this.end], LINE_WIDTH, color);
+    }
+
+    /**
+     * Checks if this line is identical to another line with regards to the points it connects
+     * @param {Line} other The other line to compare with this line
+     * @returns {boolean} True if the lines connect the same points (regardless of order), false otherwise
+     */
+    equals(other) {
+        return (this.start === other.start && this.end === other.end) || (this.start === other.end && this.end === other.start);
     }
 
     /**
@@ -105,10 +127,10 @@ class Line {
         if (this.start === other.start || this.start === other.end || this.end === other.start || this.end === other.end) {
             return false; // Lines share a point, so they don't intersect
         }
-        const pa1 = this.points[this.start];
-        const pa2 = this.points[this.end];
-        const pb1 = this.points[other.start];
-        const pb2 = this.points[other.end];
+        const pa1 = this.state.points[this.start];
+        const pa2 = this.state.points[this.end];
+        const pb1 = this.state.points[other.start];
+        const pb2 = this.state.points[other.end];
         if (pa1.equals(pb1) || pa1.equals(pb2) || pa2.equals(pb1) || pa2.equals(pb2)) {
             return true; // Non-identical points are on top of each other, so they intersect
         }
@@ -238,13 +260,13 @@ class State {
      * @param {number} level The current level of the game
      * @param {CanvasDisplay} canvasDisplay The screen to draw the game on
      * @param {HTMLButtonElement} resetButton The button to reset the current level
-     * @param {HTMLButtonElement} nextLevelButton The button to go to the next level
+     * @param {HTMLButtonElement} secondActionButton The button to show solution or go to the next level
      */
-    constructor(level, canvasDisplay, resetButton, nextLevelButton) {
+    constructor(level, canvasDisplay, resetButton, secondActionButton) {
         this.level = level;
         this.canvasDisplay = canvasDisplay;
         this.resetButton = resetButton;
-        this.nextLevelButton = nextLevelButton;
+        this.secondActionButton = secondActionButton;
 
         /**
          * The array of points in the game
@@ -265,16 +287,10 @@ class State {
         this.selectedPointIndex = null;
 
         /**
-         * The position of the selected point when it was selected, or null if no point is selected
+         * The offset of the mouse relative to the selected point when it was selected, or null if no point is selected
          * @type {Vector | null}
          */
-        this.selectedPointStartPos = null;
-
-        /**
-         * The position of the mouse when the current point was selected, or null if no point is selected
-         * @type {Vector | null}
-         */
-        this.mouseStartPos = null;
+        this.mouseOffset = null;
 
         /**
          * Flag indicating whether the current level is solved (i.e. no lines intersect)
@@ -288,6 +304,18 @@ class State {
          */
         this.choseToStay = false;
 
+        /**
+         * The original generated solution points
+         * @type {Vector[]}
+         */
+        this.solutionPoints = [];
+
+        /**
+         * The initial starting state of the points after shuffling
+         * @type {Vector[]}
+         */
+        this.shuffledPoints = [];
+
         this.canvasDisplay.registerEventHandlers(
             this.onMouseDown.bind(this),
             this.onMouseMove.bind(this),
@@ -295,24 +323,37 @@ class State {
         );
 
         this.resetButton.addEventListener('click', () => this.reset());
-        this.nextLevelButton.addEventListener('click', () => this.nextLevel());
+        this.secondActionButton.addEventListener('click', () => {
+            if (this.choseToStay) {
+                this.nextLevel();
+            } else {
+                this.points = this.solutionPoints.map(point => point.clone());
+                this.updateIntersections();
+                this.draw();
+            }
+        });
 
         // Start with 4 points and increase at a rate that is slower than linear
         this.numPoints = 4 + Math.floor(Math.sqrt(this.level));
     }
 
-    reset() {
+    generate() {
         let attempts = 0;
-        while (!this.generate()) {
-            console.log(`Attempt ${attempts + 1} to generate level failed`);
+        while (!this.tryCreateLines()) {
             if (++attempts > 10) {
                 alert('Failed to generate level, please refresh the page to try again');
                 throw new Error('Failed to generate level after 10 attempts');
             }
         }
+        console.log(`Generated level ${this.level} with ${this.points.length} points and ${this.lines.length} lines after ${attempts} attempts`);
 
         this.draw();
+    }
 
+    reset() {
+        this.points = this.shuffledPoints.map(point => point.clone());
+        this.updateIntersections();
+        this.draw();
     }
 
     /**
@@ -369,28 +410,26 @@ class State {
      * Attempts to generate a level
      * @returns {boolean} True if the level was generated successfully, false otherwise
      */
-    generate() {
+    tryCreateLines() {
+        this.points = [];
+        this.lines = [];
+
         let attempts = 0;
         while (this.points.length < this.numPoints) {
             // place the points randomly, but not too close to the edges
             const x = (Math.random() * 0.8 + 0.1) * this.canvasDisplay.width;
             const y = (Math.random() * 0.8 + 0.1) * this.canvasDisplay.height;
             const point = new Vector(x, y);
-            let tooClose = false;
-            for (const existingPoint of this.points) {
-                if (point.distanceTo(existingPoint) < 3 * POINT_RADIUS) {
-                    tooClose = true;
-                    break; // Point is too close to an existing point, try again
-                }
-            }
-            if (tooClose) {
+
+            if (this.points.some(existingPoint => point.distanceTo(existingPoint) < 3 * POINT_RADIUS)) {
                 if (++attempts > 1000) {
                     console.error('Failed to generate points after 1000 attempts');
                     return false;
                 }
-            } else {
-                this.points.push(point);
+                continue;
             }
+
+            this.points.push(point);
         }
 
         const lineAttempts = this.numPoints * this.numPoints; // Maximum number of lines is n*(n-1)/2, but we want to allow some failed attempts
@@ -401,18 +440,14 @@ class State {
                 end += 1; // Ensure end is different from start
             }
 
-            const line = new Line(this.points, start, end);
-            let intersectsExisting = false;
-            for (const existingLine of this.lines) {
-                if (line.intersects(existingLine)) {
-                    intersectsExisting = true;
-                    break;
-                }
+            const line = new Line(this, start, end);
+            if (this.lines.some(existingLine => line.equals(existingLine) || line.intersects(existingLine))) {
+                continue; // Line intersects an existing line, try again
             }
-            if (!intersectsExisting) {
-                this.lines.push(line);
-            }
+            this.lines.push(line);
         }
+
+        console.log(`Generated ${this.points.length} points and ${this.lines.length} lines`);
 
         let numLinesPerPoint = new Array(this.points.length).fill(0);
         for (const line of this.lines) {
@@ -424,6 +459,8 @@ class State {
             console.error('Failed to generate lines: some points are not connected');
             return false;
         }
+
+        this.solutionPoints = this.points.map(point => point.clone());
 
         // shuffle points until the puzzle is not solved
         attempts = 0;
@@ -448,6 +485,8 @@ class State {
             }
         }
 
+        this.shuffledPoints = this.points.map(point => point.clone());
+
         return true;
     }
 
@@ -467,12 +506,10 @@ class State {
         }
         if (closestPointIndex !== null) {
             this.selectedPointIndex = closestPointIndex;
-            this.selectedPointStartPos = this.points[closestPointIndex];
-            this.mouseStartPos = mousePos;
+            this.mouseOffset = this.points[closestPointIndex].subtract(mousePos);
         } else {
             this.selectedPointIndex = null;
-            this.selectedPointStartPos = null;
-            this.mouseStartPos = null;
+            this.mouseOffset = null;
         }
         this.draw();
     }
@@ -482,12 +519,11 @@ class State {
      * @param {Vector} mousePos The position of the mouse when it is moved
      */
     onMouseMove(mousePos) {
-        if (this.selectedPointIndex === null || this.selectedPointStartPos === null || this.mouseStartPos === null) {
+        if (this.selectedPointIndex === null || this.mouseOffset === null) {
             return;
         }
 
-        const delta = mousePos.subtract(this.mouseStartPos);
-        this.points[this.selectedPointIndex] = new Vector(this.selectedPointStartPos.x + delta.x, this.selectedPointStartPos.y + delta.y);
+        this.points[this.selectedPointIndex] = mousePos.add(this.mouseOffset);
 
         this.updateIntersections();
         this.draw();
@@ -502,8 +538,7 @@ class State {
         }
 
         this.selectedPointIndex = null;
-        this.selectedPointStartPos = null;
-        this.mouseStartPos = null;
+        this.mouseOffset = null;
         this.draw();
 
         if (this.isSolved && !this.choseToStay) {
@@ -512,7 +547,7 @@ class State {
                 this.nextLevel();
             } else {
                 this.choseToStay = true;
-                this.nextLevelButton.hidden = false;
+                this.secondActionButton.textContent = 'Next Level';
             }
         }
     }
@@ -546,9 +581,9 @@ if (!(resetButton instanceof HTMLButtonElement)) {
     throw new Error('Reset button element not found');
 }
 
-const nextLevelButton = document.getElementById('NextLevelButton');
-if (!(nextLevelButton instanceof HTMLButtonElement)) {
-    throw new Error('Next level button element not found');
+const secondActionButton = document.getElementById('SecondActionButton');
+if (!(secondActionButton instanceof HTMLButtonElement)) {
+    throw new Error('Second action button element not found');
 }
 
 const canvasDisplay = new CanvasDisplay(canvas, CANVAS_WIDTH, CANVAS_HEIGHT);
@@ -564,6 +599,6 @@ if (level <= 0 || isNaN(level)) {
 } else {
     console.log(`Current level: ${level}`);
 
-    const state = new State(level, canvasDisplay, resetButton, nextLevelButton);
-    state.reset();
+    const state = new State(level, canvasDisplay, resetButton, secondActionButton);
+    state.generate();
 }
