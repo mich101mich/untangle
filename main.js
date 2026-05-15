@@ -53,18 +53,17 @@ class Vector {
 
     /**
      * Draws the point represented by this vector on the canvas
-     * @param {CanvasRenderingContext2D} ctx The canvas context to draw on
+     * @param {CanvasDisplay} canvas The canvas context to draw on
      * @param {boolean} isSelected Whether the point is currently selected
      */
-    draw(ctx, isSelected) {
-        ctx.beginPath();
-        ctx.arc(this.x, this.y, POINT_RADIUS, 0, 2 * Math.PI);
+    draw(canvas, isSelected) {
+        let fillColor;
         if (this.overlapsAny) {
-            ctx.fillStyle = isSelected ? '#AA3333' : '#FF5555';
+            fillColor = isSelected ? '#AA3333' : '#FF5555';
         } else {
-            ctx.fillStyle = isSelected ? '#AAAAAA' : '#FFFFFF';
+            fillColor = isSelected ? '#AAAAAA' : '#FFFFFF';
         }
-        ctx.fill();
+        canvas.drawCircle(this, POINT_RADIUS, fillColor);
     }
 }
 
@@ -90,15 +89,11 @@ class Line {
 
     /**
      * Draws the line on the canvas
-     * @param {CanvasRenderingContext2D} ctx The canvas context to draw on
+     * @param {CanvasDisplay} canvas The canvas context to draw on
      */
-    draw(ctx) {
-        ctx.beginPath();
-        ctx.moveTo(this.points[this.start].x, this.points[this.start].y);
-        ctx.lineTo(this.points[this.end].x, this.points[this.end].y);
-        ctx.strokeStyle = this.intersectsAny ? 'red' : 'green';
-        ctx.lineWidth = LINE_WIDTH;
-        ctx.stroke();
+    draw(canvas) {
+        const color = this.intersectsAny ? 'red' : 'green';
+        canvas.drawLine(this.points[this.start], this.points[this.end], LINE_WIDTH, color);
     }
 
     /**
@@ -153,10 +148,88 @@ class CanvasDisplay {
         this.canvas.height = height;
     }
 
+    /**
+     * Clears the canvas by filling it with black
+     */
     clear() {
         this.ctx.fillStyle = 'black';
         this.ctx.fillRect(0, 0, this.width, this.height);
     }
+
+    /**
+     * Draws a line on the canvas
+     * @param {Vector} start The starting point of the line
+     * @param {Vector} end The ending point of the line
+     * @param {number} width The width of the line
+     * @param {string} color The color of the line
+     */
+    drawLine(start, end, width, color) {
+        this.ctx.beginPath();
+        this.ctx.moveTo(start.x, start.y);
+        this.ctx.lineTo(end.x, end.y);
+        this.ctx.strokeStyle = color;
+        this.ctx.lineWidth = width;
+        this.ctx.stroke();
+    }
+
+    /**
+     * Draws a circle on the canvas
+     * @param {Vector} center The center of the circle
+     * @param {number} radius The radius of the circle
+     * @param {string} color The color of the circles
+     */
+    drawCircle(center, radius, color) {
+        this.ctx.beginPath();
+        this.ctx.arc(center.x, center.y, radius, 0, 2 * Math.PI);
+        this.ctx.fillStyle = color;
+        this.ctx.fill();
+    }
+
+    /**
+     * Registers event handlers for mouse and touch input on the canvas
+     * @param {(mousePos: Vector) => void} onMouseDown The handler for mouse down events
+     * @param {(mousePos: Vector) => void} onMouseMove The handler for mouse move events
+     * @param {() => void} onMouseUp The handler for mouse up events
+     */
+    registerEventHandlers(onMouseDown, onMouseMove, onMouseUp) {
+        this.canvas.addEventListener('mousedown', event => onMouseDown(new Vector(event.clientX, event.clientY)));
+        this.canvas.addEventListener('mousemove', event => onMouseMove(new Vector(event.clientX, event.clientY)));
+        this.canvas.addEventListener('mouseup', () => onMouseUp());
+        this.canvas.addEventListener('mouseleave', () => onMouseUp());
+
+        this.canvas.addEventListener('touchstart', event => {
+            event.preventDefault();
+            const touchPos = this.getSingleTouchPos(event);
+            if (touchPos !== null) {
+                onMouseDown(touchPos);
+            }
+        }, { passive: false });
+        this.canvas.addEventListener('touchmove', event => {
+            event.preventDefault();
+            const touchPos = this.getSingleTouchPos(event);
+            if (touchPos !== null) {
+                onMouseMove(touchPos);
+            }
+        }, { passive: false });
+        this.canvas.addEventListener('touchend', () => onMouseUp());
+        this.canvas.addEventListener('touchcancel', () => onMouseUp());
+
+    }
+
+    /**
+     * Converts a single touch input to a canvas-local position.
+     * @param {TouchEvent} event The touch event to read the position from
+     * @returns {Vector | null} The touch position, or null for no touch/multi-touch
+     */
+    getSingleTouchPos(event) {
+        if (event.touches.length !== 1) {
+            return null;
+        }
+
+        const touch = event.touches[0];
+        return new Vector(touch.clientX, touch.clientY);
+    }
+
 }
 
 class State {
@@ -215,9 +288,11 @@ class State {
          */
         this.choseToStay = false;
 
-        this.canvasDisplay.canvas.addEventListener('mousedown', event => this.onMouseDown(new Vector(event.offsetX, event.offsetY)));
-        this.canvasDisplay.canvas.addEventListener('mousemove', event => this.onMouseMove(new Vector(event.offsetX, event.offsetY)));
-        this.canvasDisplay.canvas.addEventListener('mouseup', () => this.onMouseUp());
+        this.canvasDisplay.registerEventHandlers(
+            this.onMouseDown.bind(this),
+            this.onMouseMove.bind(this),
+            this.onMouseUp.bind(this)
+        );
 
         this.resetButton.addEventListener('click', () => this.reset());
         this.nextLevelButton.addEventListener('click', () => this.nextLevel());
@@ -281,11 +356,11 @@ class State {
         this.canvasDisplay.clear();
 
         for (const line of this.lines) {
-            line.draw(this.canvasDisplay.ctx);
+            line.draw(this.canvasDisplay);
         }
 
         for (let i = 0; i < this.points.length; i++) {
-            this.points[i].draw(this.canvasDisplay.ctx, i === this.selectedPointIndex);
+            this.points[i].draw(this.canvasDisplay, i === this.selectedPointIndex);
         }
     }
 
