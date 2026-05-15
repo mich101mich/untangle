@@ -297,7 +297,10 @@ class State {
     generate() {
         let attempts = 0;
         while (this.points.length < this.numPoints) {
-            const point = new Vector(Math.random() * width, Math.random() * height);
+            // place the points randomly, but not too close to the edges
+            const x = (Math.random() * 0.8 + 0.1) * this.canvasDisplay.width;
+            const y = (Math.random() * 0.8 + 0.1) * this.canvasDisplay.height;
+            const point = new Vector(x, y);
             let tooClose = false;
             for (const existingPoint of this.points) {
                 if (point.distanceTo(existingPoint) < 3 * POINT_RADIUS) {
@@ -352,8 +355,8 @@ class State {
         while (true) {
             for (const point of this.points) {
                 // place the points randomly, but not too close to the edges
-                point.x = (Math.random() * 0.8 + 0.1) * width;
-                point.y = (Math.random() * 0.8 + 0.1) * height;
+                point.x = (Math.random() * 0.8 + 0.1) * this.canvasDisplay.width;
+                point.y = (Math.random() * 0.8 + 0.1) * this.canvasDisplay.height;
             }
             this.updateIntersections();
 
@@ -451,10 +454,12 @@ class State {
 // Initialization
 // ================================================================================
 
-const width = Math.max(200, window.innerWidth);
-const height = Math.max(200, window.innerHeight);
-const LINE_WIDTH = width / 100;
-const POINT_RADIUS = width / 50;
+const CANVAS_WIDTH = Math.max(200, window.innerWidth);
+const CANVAS_HEIGHT = Math.max(200, window.innerHeight);
+
+const TARGET_SIZE = Math.sqrt(CANVAS_WIDTH * CANVAS_HEIGHT); // geometric mean of width and height to account for skewed aspect ratios
+const LINE_WIDTH = TARGET_SIZE / 60;
+const POINT_RADIUS = TARGET_SIZE / 30;
 
 const canvas = document.getElementById('gameCanvas');
 if (!(canvas instanceof HTMLCanvasElement)) {
@@ -471,7 +476,7 @@ if (!(nextLevelButton instanceof HTMLButtonElement)) {
     throw new Error('Next level button element not found');
 }
 
-const canvasDisplay = new CanvasDisplay(canvas, width, height);
+const canvasDisplay = new CanvasDisplay(canvas, CANVAS_WIDTH, CANVAS_HEIGHT);
 
 // get current level from URL ("...?level=1")
 const urlParams = new URLSearchParams(window.location.search);
