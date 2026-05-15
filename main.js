@@ -4,6 +4,16 @@
 // Types and functions
 // ================================================================================
 
+/**
+ * Directly goes to a specific level
+ * @param {number} level The level to go to
+ */
+function goToLevel(level) {
+    const urlParams = new URLSearchParams(window.location.search);
+    urlParams.set('level', level.toString());
+    window.location.search = urlParams.toString();
+}
+
 class Vector {
     /**
      * @param {number} x The x-coordinate of the point
@@ -12,6 +22,7 @@ class Vector {
     constructor(x, y) {
         this.x = x;
         this.y = y;
+        this.overlapsAny = false;
     }
 
     /**
@@ -48,7 +59,11 @@ class Vector {
     draw(ctx, isSelected) {
         ctx.beginPath();
         ctx.arc(this.x, this.y, POINT_RADIUS, 0, 2 * Math.PI);
-        ctx.fillStyle = isSelected ? 'lightblue' : 'white';
+        if (this.overlapsAny) {
+            ctx.fillStyle = isSelected ? '#AA3333' : '#FF5555';
+        } else {
+            ctx.fillStyle = isSelected ? '#AAAAAA' : '#FFFFFF';
+        }
         ctx.fill();
     }
 }
@@ -147,14 +162,16 @@ class CanvasDisplay {
 class State {
     /**
      * Creates a new (empty) game state
+     * @param {number} level The current level of the game
      * @param {CanvasDisplay} canvasDisplay The screen to draw the game on
+     * @param {HTMLButtonElement} resetButton The button to reset the current level
+     * @param {HTMLButtonElement} nextLevelButton The button to go to the next level
      */
-    constructor(canvasDisplay) {
-        /**
-         * The screen to draw the game on
-         * @type {CanvasDisplay}
-         */
+    constructor(level, canvasDisplay, resetButton, nextLevelButton) {
+        this.level = level;
         this.canvasDisplay = canvasDisplay;
+        this.resetButton = resetButton;
+        this.nextLevelButton = nextLevelButton;
 
         /**
          * The array of points in the game
@@ -175,6 +192,18 @@ class State {
         this.selectedPointIndex = null;
 
         /**
+         * The position of the selected point when it was selected, or null if no point is selected
+         * @type {Vector | null}
+         */
+        this.selectedPointStartPos = null;
+
+        /**
+         * The position of the mouse when the current point was selected, or null if no point is selected
+         * @type {Vector | null}
+         */
+        this.mouseStartPos = null;
+
+        /**
          * Flag indicating whether the current level is solved (i.e. no lines intersect)
          * @type {boolean}
          */
@@ -185,16 +214,55 @@ class State {
          * @type {boolean}
          */
         this.choseToStay = false;
+
+        this.canvasDisplay.canvas.addEventListener('mousedown', event => this.onMouseDown(new Vector(event.offsetX, event.offsetY)));
+        this.canvasDisplay.canvas.addEventListener('mousemove', event => this.onMouseMove(new Vector(event.offsetX, event.offsetY)));
+        this.canvasDisplay.canvas.addEventListener('mouseup', () => this.onMouseUp());
+
+        this.resetButton.addEventListener('click', () => this.reset());
+        this.nextLevelButton.addEventListener('click', () => this.nextLevel());
+
+        // Start with 4 points and increase at a rate that is slower than linear
+        this.numPoints = 4 + Math.floor(Math.sqrt(this.level));
+    }
+
+    reset() {
+        let attempts = 0;
+        while (!this.generate()) {
+            console.log(`Attempt ${attempts + 1} to generate level failed`);
+            if (++attempts > 10) {
+                alert('Failed to generate level, please refresh the page to try again');
+                throw new Error('Failed to generate level after 10 attempts');
+            }
+        }
+
+        this.draw();
+
     }
 
     /**
      * Updates the intersectsAny property all lines
      */
     updateIntersections() {
+        for (const point of this.points) {
+            point.overlapsAny = false;
+        }
         for (const line of this.lines) {
             line.intersectsAny = false;
         }
+
         this.isSolved = true;
+
+        for (let i = 0; i < this.points.length; i++) {
+            for (let j = i + 1; j < this.points.length; j++) {
+                if (this.points[i].distanceTo(this.points[j]) < 2 * POINT_RADIUS) {
+                    this.points[i].overlapsAny = true;
+                    this.points[j].overlapsAny = true;
+                    this.isSolved = false;
+                }
+            }
+        }
+
         for (let i = 0; i < this.lines.length; i++) {
             for (let j = i + 1; j < this.lines.length; j++) {
                 if (this.lines[i].intersects(this.lines[j])) {
@@ -224,12 +292,11 @@ class State {
 
     /**
      * Attempts to generate a level
-     * @param {number} numPoints The number of points to generate for the level
      * @returns {boolean} True if the level was generated successfully, false otherwise
      */
-    generate(numPoints) {
+    generate() {
         let attempts = 0;
-        while (this.points.length < numPoints) {
+        while (this.points.length < this.numPoints) {
             const point = new Vector(Math.random() * width, Math.random() * height);
             let tooClose = false;
             for (const existingPoint of this.points) {
@@ -248,7 +315,7 @@ class State {
             }
         }
 
-        const lineAttempts = numPoints * numPoints; // Maximum number of lines is n*(n-1)/2, but we want to allow some failed attempts
+        const lineAttempts = this.numPoints * this.numPoints; // Maximum number of lines is n*(n-1)/2, but we want to allow some failed attempts
         for (let i = 0; i < lineAttempts; i++) {
             const start = Math.floor(Math.random() * this.points.length);
             let end = Math.floor(Math.random() * (this.points.length - 1));
@@ -289,9 +356,14 @@ class State {
                 point.y = (Math.random() * 0.8 + 0.1) * height;
             }
             this.updateIntersections();
-            if (!this.isSolved) {
-                break; // Puzzle is not solved, we can use this level
+
+            if (this.points.some(point => point.overlapsAny)) {
+                continue; // Some points are on top of each other, try again
             }
+            if (this.lines.some(line => line.intersectsAny)) {
+                break; // Some lines intersect, we can use this level
+            }
+
             if (++attempts > 1000) {
                 console.error('Failed to shuffle points after 1000 attempts');
                 return false;
@@ -307,7 +379,7 @@ class State {
      */
     onMouseDown(mousePos) {
         let closestPointIndex = null;
-        let closestDistance = Infinity;
+        let closestDistance = 2 * POINT_RADIUS;
         for (let i = 0; i < this.points.length; i++) {
             const distance = mousePos.distanceTo(this.points[i]);
             if (distance < closestDistance) {
@@ -315,9 +387,16 @@ class State {
                 closestPointIndex = i;
             }
         }
-        if (closestDistance < 2 * POINT_RADIUS) {
+        if (closestPointIndex !== null) {
             this.selectedPointIndex = closestPointIndex;
+            this.selectedPointStartPos = this.points[closestPointIndex];
+            this.mouseStartPos = mousePos;
+        } else {
+            this.selectedPointIndex = null;
+            this.selectedPointStartPos = null;
+            this.mouseStartPos = null;
         }
+        this.draw();
     }
 
     /**
@@ -325,11 +404,13 @@ class State {
      * @param {Vector} mousePos The position of the mouse when it is moved
      */
     onMouseMove(mousePos) {
-        if (this.selectedPointIndex === null) {
+        if (this.selectedPointIndex === null || this.selectedPointStartPos === null || this.mouseStartPos === null) {
             return;
         }
-        this.points[this.selectedPointIndex].x = mousePos.x;
-        this.points[this.selectedPointIndex].y = mousePos.y;
+
+        const delta = mousePos.subtract(this.mouseStartPos);
+        this.points[this.selectedPointIndex] = new Vector(this.selectedPointStartPos.x + delta.x, this.selectedPointStartPos.y + delta.y);
+
         this.updateIntersections();
         this.draw();
     }
@@ -343,23 +424,26 @@ class State {
         }
 
         this.selectedPointIndex = null;
+        this.selectedPointStartPos = null;
+        this.mouseStartPos = null;
         this.draw();
 
-        if (!this.isSolved || this.choseToStay) {
-            return;
+        if (this.isSolved && !this.choseToStay) {
+            const shouldAdvance = confirm('Congratulations, you solved the puzzle! 🎉\n\nGo to the next level?');
+            if (shouldAdvance) {
+                this.nextLevel();
+            } else {
+                this.choseToStay = true;
+                this.nextLevelButton.hidden = false;
+            }
         }
+    }
 
-        const shouldAdvance = confirm('Congratulations, you solved the puzzle! 🎉\n\nGo to the next level?');
-        if (!shouldAdvance) {
-            this.choseToStay = true;
-            return;
-        }
-
-        // Go to the next level by incrementing the "level" parameter in the URL
-        const urlParams = new URLSearchParams(window.location.search);
-        const nextLevel = level + 1;
-        urlParams.set('level', nextLevel.toString());
-        window.location.search = urlParams.toString();
+    /**
+     * Advances to the next level
+     */
+    nextLevel() {
+        goToLevel(this.level + 1);
     }
 }
 
@@ -377,40 +461,29 @@ if (!(canvas instanceof HTMLCanvasElement)) {
     throw new Error('Canvas element not found');
 }
 
+const resetButton = document.getElementById('ResetButton');
+if (!(resetButton instanceof HTMLButtonElement)) {
+    throw new Error('Reset button element not found');
+}
+
+const nextLevelButton = document.getElementById('NextLevelButton');
+if (!(nextLevelButton instanceof HTMLButtonElement)) {
+    throw new Error('Next level button element not found');
+}
+
 const canvasDisplay = new CanvasDisplay(canvas, width, height);
-const state = new State(canvasDisplay);
 
 // get current level from URL ("...?level=1")
 const urlParams = new URLSearchParams(window.location.search);
 const rawLevel = urlParams.get('level') || '1';
-const level = parseInt(rawLevel) || 1;
+const level = parseInt(rawLevel, 10);
 
-console.log(`Current level: ${level}`);
+if (level <= 0 || isNaN(level)) {
+    alert('Invalid level number in URL, going to level 1');
+    goToLevel(1);
+} else {
+    console.log(`Current level: ${level}`);
 
-// Start with 4 points and increase at a rate that is slower than linear
-const numPoints = 4 + Math.floor(Math.sqrt(level));
-
-let attempts = 0;
-while (!state.generate(numPoints)) {
-    console.log(`Attempt ${attempts + 1} to generate level failed`);
-    if (++attempts > 10) {
-        alert('Failed to generate level, please refresh the page to try again');
-        throw new Error('Failed to generate level after 10 attempts');
-    }
+    const state = new State(level, canvasDisplay, resetButton, nextLevelButton);
+    state.reset();
 }
-
-state.draw();
-
-canvas.addEventListener('mousedown', (event) => {
-    const mousePos = new Vector(event.offsetX, event.offsetY);
-    state.onMouseDown(mousePos);
-});
-
-canvas.addEventListener('mousemove', (event) => {
-    const mousePos = new Vector(event.offsetX, event.offsetY);
-    state.onMouseMove(mousePos);
-});
-
-canvas.addEventListener('mouseup', () => {
-    state.onMouseUp();
-});
